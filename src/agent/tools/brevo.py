@@ -15,7 +15,7 @@ def send_email(recipient: str, subject: str, body: str) -> str:
         Args:
             recipient (str): The email address of the recipient.
             subject (str): The subject of the email.
-            body (str): The body of the email as html content.
+            body (str): The body of the email as html content (make sure to have a beautiful html template for the body).
     """
     api_instance = brevo_python.TransactionalEmailsApi(brevo_python.ApiClient(configuration))
     
@@ -37,5 +37,7 @@ def send_email(recipient: str, subject: str, body: str) -> str:
         # Send a transactional email
         api_response = api_instance.send_transac_email(send_smtp_email)
         print(api_response)
+        return f"✅ Email successfully sent to {recipient} with subject '{subject}'."
     except ApiException as e:
         print("Exception when calling TransactionalEmailsApi->send_transac_email: %s\n" % e)
+        return f"❌ Failed to send email: {str(e)}"
