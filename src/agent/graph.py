@@ -14,16 +14,16 @@ from typing_extensions import TypedDict, Annotated, Sequence
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_core.messages import BaseMessage , HumanMessage, AIMessage, SystemMessage
 from langgraph.graph.message import add_messages
+from langgraph.prebuilt import ToolNode
+from agent.tools.brevo import send_email
 
 class AgentState(TypedDict):
    messages : Annotated[Sequence[BaseMessage] , add_messages]
 
-model = ChatGoogleGenerativeAI(model="gemini-2.5-flash")
+tools = [send_email]
+model = ChatGoogleGenerativeAI(model="gemini-2.5-flash").bind_tools(tools)
 
-def call_model(state: State) -> AgentState:
-    """Process input and returns output."""
-    
-    system_prompt = SystemMessage(content="""
+system_prompt = SystemMessage(content="""
             You are **AgentIA**, an intelligent assistant designed to interact with and utilize an LLM model to process user requests.
 
             Your purpose is to:
@@ -36,7 +36,14 @@ def call_model(state: State) -> AgentState:
             - When the user asks to modify or update data, call the relevant tool (e.g., 'update') with the full modified result.
             - When the user indicates the task is complete, call the 'save' tool.
             - Always show the current state or output after any modification or LLM call.
+            
+            Tools: 
+            - send_email: Sends an email using Brevo (make sure to have a beautyfull html template for the body).
     """)
+
+def call_model(state: State) -> AgentState:
+    """Process input and returns output."""
+    
         
     all_messages = [system_prompt] + list(state["messages"])
     response = model.invoke(all_messages)
@@ -46,10 +53,22 @@ def call_model(state: State) -> AgentState:
 if "GOOGLE_API_KEY" not in os.environ:
     os.environ["GOOGLE_API_KEY"] = getpass.getpass("Enter your Google AI API key: ")
 
+def should_continue(state: AgentState) -> bool:
+    """Determine if the agent should continue and last message contains tools calls"""
+    
+    result = state["messages"][-1]
+    return hasattr(result, "tool_calls") and len(result.tool_calls) > 0
+
 # Define the graph
 graph = (
     StateGraph(AgentState)
-    .add_node(call_model)
-    .add_edge("__start__", "call_model")
-    .compile(name="New Graph")
+    .add_node("llm",call_model)
+    .add_node("tools",ToolNode(tools))
+    .add_edge("__start__", "llm")
+    .add_conditional_edges(
+        "llm",
+        should_continue,
+        {True: "tools" , False: "__end__"}
+    )
+    .compile(name="LLM -> Brevo Graph")
 )

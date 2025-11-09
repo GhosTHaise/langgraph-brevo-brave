@@ -9,6 +9,7 @@ readme = "README.md"
 license = { text = "MIT" }
 requires-python = ">=3.10"
 dependencies = [
+    "brevo-python",
     "langchain-core>=1.0.4",
     "langchain-google-genai>=3.0.1",
     "langgraph>=1.0.0",
@@ -56,6 +57,9 @@ lint.ignore = [
 "tests/*" = ["D", "UP"]
 [tool.ruff.lint.pydocstyle]
 convention = "google"
+
+[tool.uv.sources]
+brevo-python = { git = "https://github.com/getbrevo/brevo-python.git" }
 
 [dependency-groups]
 dev = [
