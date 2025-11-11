@@ -2,9 +2,12 @@ import brevo_python
 import os
 from brevo_python.rest import ApiException
 from langchain_core.tools import tool
-from langchain_core.messages import SystemMessage
+from langchain_core.messages import SystemMessage, HumanMessage
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_groq import ChatGroq
+
+#generative_model = ChatGoogleGenerativeAI(model="gemini-2.5-flash")
+generative_model = ChatGroq(model="openai/gpt-oss-20b")
 
 configuration = brevo_python.Configuration()
 configuration.api_key['api-key'] = os.getenv("BREVO_API_KEY")
@@ -54,9 +57,6 @@ def send_email(recipient: str, subject: str, body: str) -> str:
         print("Exception when calling TransactionalEmailsApi->send_transac_email: %s\n" % e)
         return SystemMessage(content=f"❌ Failed to send email to {recipient} with subject '{subject}'.")
     
-    
-generative_model = ChatGoogleGenerativeAI(model="gemini-2.5-flash")
-#generative_model = ChatGroq(model="llama-3.1-8b-instant")
 @tool
 def generate_email_body(subject: str = "", prompt: str = "") -> dict:
     """
@@ -79,6 +79,11 @@ def generate_email_body(subject: str = "", prompt: str = "") -> dict:
 
     response = generative_model.invoke([system_prompt, human_message])
 
-    print("=>>>>",response.content)
-    # ✅ Return only the content (the actual HTML), not the whole message
-    return {"body": response.content}
+    html = response.content.strip()
+    print("=>>>>", html)
+
+    # ✅ Return structured result AND a message-safe version
+    return {
+        "body": html,
+        "message": SystemMessage(content="✅ Generated email body successfully.")
+    }
