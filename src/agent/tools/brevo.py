@@ -2,7 +2,12 @@ import brevo_python
 import os
 from brevo_python.rest import ApiException
 from langchain_core.tools import tool
-from langchain_core.messages import SystemMessage
+from langchain_core.messages import SystemMessage, HumanMessage
+from langchain_google_genai import ChatGoogleGenerativeAI
+from langchain_groq import ChatGroq
+
+#generative_model = ChatGoogleGenerativeAI(model="gemini-2.5-flash")
+generative_model = ChatGroq(model="openai/gpt-oss-20b")
 
 configuration = brevo_python.Configuration()
 configuration.api_key['api-key'] = os.getenv("BREVO_API_KEY")
@@ -52,3 +57,33 @@ def send_email(recipient: str, subject: str, body: str) -> str:
         print("Exception when calling TransactionalEmailsApi->send_transac_email: %s\n" % e)
         return SystemMessage(content=f"❌ Failed to send email to {recipient} with subject '{subject}'.")
     
+@tool
+def generate_email_body(subject: str = "", prompt: str = "") -> dict:
+    """
+    Generate a beautiful HTML email body based on the given context or description.
+    Returns a dict so other tools can reuse the result easily.
+    """
+    full_context = prompt or subject
+    if not full_context.strip():
+        raise ValueError("generate_email_body requires a non-empty subject or prompt.")
+
+    system_prompt = SystemMessage(
+        content=(
+            "You are a professional HTML email writer. "
+            "Create a well-formatted, attractive, and mobile-friendly HTML email body "
+            "based on the given context. "
+            "Do NOT include any subject or recipient info. Output only valid HTML content."
+        )
+    )
+    human_message = HumanMessage(content=full_context)
+
+    response = generative_model.invoke([system_prompt, human_message])
+
+    html = response.content.strip()
+    print("=>>>>", html)
+
+    # ✅ Return structured result AND a message-safe version
+    return {
+        "body": html,
+        "message": SystemMessage(content="✅ Generated email body successfully.")
+    }
