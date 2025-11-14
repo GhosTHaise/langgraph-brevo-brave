@@ -5,7 +5,7 @@ Returns a predefined response. Replace logic and configuration as needed.
 
 from __future__ import annotations
 import os
-from typing import TypedDict
+from typing import Any, Dict, List, Literal, Optional, cast
 
 from langgraph.graph import StateGraph
 from typing_extensions import TypedDict, Annotated, Sequence
@@ -15,6 +15,8 @@ from langchain_core.messages import BaseMessage ,SystemMessage,HumanMessage
 from langgraph.graph.message import add_messages
 #from langgraph.prebuilt import ToolNode
 from agent.tools.brevo import send_email,generate_email_body
+from agent.configuration import Configuration
+from langchain_core.runnables import RunnableConfig
 
 class AgentState(TypedDict):
    messages : Annotated[Sequence[BaseMessage] , add_messages]
@@ -45,13 +47,15 @@ system_prompt = SystemMessage(content="""
             {email_instructions}
     """)
 
-def call_model(state: AgentState) -> AgentState:
+def call_model(state: AgentState, config: Optional[RunnableConfig] = None) -> AgentState:
     context = state.get("context", {})
     context_message = (
         f"Here is the current context:\n{context}\n"
         "Use it to make informed decisions or chain tool results."
     )
 
+    configuration = Configuration.from_runnable_config(config)
+    
     all_messages = [system_prompt, HumanMessage(content=context_message)] + list(state["messages"])
     response = model.invoke(all_messages)
 
@@ -103,7 +107,7 @@ def should_continue(state: AgentState) -> bool:
 
 # Define the graph
 graph = (
-    StateGraph(AgentState)
+    StateGraph(AgentState, context_schema=Configuration)
     .add_node("llm",call_model)
     .add_node("tools", call_tool)
     .add_edge("__start__", "llm")
