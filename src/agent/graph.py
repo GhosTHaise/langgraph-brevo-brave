@@ -17,6 +17,7 @@ from langgraph.graph.message import add_messages
 from agent.tools.brevo import send_email,generate_email_body
 from agent.configuration import Configuration
 from langchain_core.runnables import RunnableConfig
+from agent.utils import init_model
 
 class AgentState(TypedDict):
    messages : Annotated[Sequence[BaseMessage] , add_messages]
@@ -24,7 +25,7 @@ class AgentState(TypedDict):
    last_tool_output: dict | None
    
 tools = [send_email, generate_email_body]
-model = ChatGroq(model="openai/gpt-oss-20b").bind_tools(tools)
+#model = ChatGroq(model="openai/gpt-oss-20b").bind_tools(tools)
 #model = ChatGoogleGenerativeAI(model="gemini-2.5-flash").bind_tools(tools)
 
 system_prompt = SystemMessage(content="""
@@ -54,7 +55,8 @@ def call_model(state: AgentState, config: Optional[RunnableConfig] = None) -> Ag
         "Use it to make informed decisions or chain tool results."
     )
 
-    configuration = Configuration.from_runnable_config(config)
+    raw_model = init_model(config)
+    model = raw_model.bind_tools(tools, tool_choice="any")
     
     all_messages = [system_prompt, HumanMessage(content=context_message)] + list(state["messages"])
     response = model.invoke(all_messages)
@@ -99,11 +101,12 @@ def call_tool(state: AgentState) -> AgentState:
         "context": {**state.get("context", {}), tool_name: result},
     }
 
-def should_continue(state: AgentState) -> bool:
+def should_continue(state: AgentState) -> Literal["tools", "__end__"]:
     """Determine if the agent should continue and last message contains tools calls"""
     
     result = state["messages"][-1]
-    return hasattr(result, "tool_calls") and len(result.tool_calls) > 0
+    shouldContinue = hasattr(result, "tool_calls") and len(result.tool_calls) > 0
+    return "tools" if shouldContinue else "__end__"
 
 # Define the graph
 graph = (
@@ -113,8 +116,7 @@ graph = (
     .add_edge("__start__", "llm")
     .add_conditional_edges(
         "llm",
-        should_continue,
-        {True: "tools" , False: "__end__"}
+        should_continue
     )
     .add_edge("tools", "llm")
     .compile(name="LLM -> Brevo Graph")
