@@ -5,13 +5,13 @@ Returns a predefined response. Replace logic and configuration as needed.
 
 from __future__ import annotations
 import os
-from typing import Any, Dict, List, Literal, Optional, cast
+from typing import Literal, Optional
 
 from langgraph.graph import StateGraph
 from typing_extensions import TypedDict, Annotated, Sequence
-from langchain_google_genai import ChatGoogleGenerativeAI
+#from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_groq import ChatGroq
-from langchain_core.messages import BaseMessage ,SystemMessage,HumanMessage
+from langchain_core.messages import BaseMessage ,SystemMessage,HumanMessage, AIMessage
 from langgraph.graph.message import add_messages
 #from langgraph.prebuilt import ToolNode
 from agent.tools.brevo import send_email,generate_email_body
@@ -72,34 +72,32 @@ if "GOOGLE_API_KEY" not in os.environ:
     os.environ["GOOGLE_API_KEY"] = getpass.getpass("Enter your Google AI API key: ")
 
 def call_tool(state: AgentState) -> AgentState:
-    """Custom ToolNode replacement that updates state with tool output."""
     last_msg = state["messages"][-1]
-    
+
+    # No tool call? stop here.
     if not hasattr(last_msg, "tool_calls") or not last_msg.tool_calls:
-        return state  # No tool to call
+        return state
 
     tool_call = last_msg.tool_calls[0]
     tool_name = tool_call["name"]
     tool_args = tool_call["args"]
 
-    # Dynamically call the tool
+    # Find the tool function
     tool_fn = next(t for t in tools if t.name == tool_name)
     result = tool_fn.invoke(tool_args)
+    print(f"Tool `{tool_name}` executed successfully.\nResult: {result}")
+    # Always append an AIMessage with NO tool calls inside
+    ai_msg = AIMessage(
+        content=f"Tool `{tool_name}` executed successfully.\nResult: {result.message}",
+        tool_calls=[]        # <==== VERY IMPORTANT
+    )
 
-    # ✅ Extract a safe message to append
-    if isinstance(result, dict):
-        msg = result.get("message", SystemMessage(content=f"✅ {tool_name} executed successfully."))
-    elif isinstance(result, BaseMessage):
-        msg = result
-    else:
-        msg = SystemMessage(content=str(result))
-
-    # ✅ Update the state with message + structured result
     return {
-        "messages": list(state["messages"]) + [msg],
-        "last_tool_output": result if isinstance(result, dict) else {"output": str(result)},
+        "messages": list(state["messages"]) + [ai_msg],
         "context": {**state.get("context", {}), tool_name: result},
+        "last_tool_output": result if isinstance(result, dict) else {"output": str(result)},
     }
+
 
 def should_continue(state: AgentState) -> Literal["tools", "__end__"]:
     """Determine if the agent should continue and last message contains tools calls"""

@@ -80,7 +80,6 @@ def generate_email_body(subject: str = "", prompt: str = "") -> dict:
     response = generative_model.invoke([system_prompt, human_message])
 
     html = response.content.strip()
-    print("=>>>>", html)
 
     # ✅ Return structured result AND a message-safe version
     return {
