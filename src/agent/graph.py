@@ -1,121 +1,129 @@
-"""LangGraph single-node graph template.
-
-Returns a predefined response. Replace logic and configuration as needed.
-"""
-
-from __future__ import annotations
+"""graph.py"""
 import os
-from typing import Literal, Optional
+import getpass
+from typing import Literal, Annotated, Sequence
+from typing_extensions import TypedDict
 
-from langgraph.graph import StateGraph
-from typing_extensions import TypedDict, Annotated, Sequence
-#from langchain_google_genai import ChatGoogleGenerativeAI
-from langchain_groq import ChatGroq
-from langchain_core.messages import BaseMessage ,SystemMessage,HumanMessage, AIMessage
+from langgraph.graph import StateGraph, END
 from langgraph.graph.message import add_messages
-#from langgraph.prebuilt import ToolNode
-from agent.tools.brevo import send_email,generate_email_body
-from agent.configuration import Configuration
-from langchain_core.runnables import RunnableConfig
-from agent.utils import init_model
+from langchain_groq import ChatGroq
+from langchain_core.messages import BaseMessage, SystemMessage, ToolMessage
 
+# Import our tools
+from agent.tools.tools import send_email, generate_email_body
+from dotenv import load_dotenv
+
+load_dotenv()
+
+if "GROQ_API_KEY" not in os.environ:
+    os.environ["GROQ_API_KEY"] = getpass.getpass("Enter your Groq API key: ")
+
+# --- Configuration ---
 class AgentState(TypedDict):
-   messages : Annotated[Sequence[BaseMessage] , add_messages]
-   context: dict
-   last_tool_output: dict | None
-   
-tools = [send_email, generate_email_body]
-#model = ChatGroq(model="openai/gpt-oss-20b").bind_tools(tools)
-#model = ChatGoogleGenerativeAI(model="gemini-2.5-flash").bind_tools(tools)
+    messages: Annotated[Sequence[BaseMessage], add_messages]
 
-system_prompt = SystemMessage(content="""
-            You are **AgentIA**, an intelligent assistant designed to interact with and utilize an LLM model to process user requests.
+# Define the tools list
+tools = [generate_email_body, send_email]
 
-            Your purpose is to:
-            - Understand the user’s intent.
-            - Call the LLM model when reasoning, drafting, or generating new content is required.
-            - Clearly display or return the model’s responses in a well-structured way.
+# Initialize Model
+# We bind tools here. critically, we do NOT set tool_choice="any".
+# This allows the model to stop calling tools when it's done.
+llm = ChatGroq(model="openai/gpt-oss-120b", temperature=0)
+llm_with_tools = llm.bind_tools(tools)
 
-            Guidelines:
-            - When the user requests a generation, summarization, or completion, call the LLM model and provide the output.
-            - When the user asks to do an action, call the relevant tool (e.g., 'update') with the full modified result.
-            - Always show the current state or output after any modification or LLM call.
-            
-            Tools: 
-            - generate_email_body: creates a formatted HTML email body.
-            - send_email: Sends an email using Brevo .
-            
-            {email_instructions}
-    """)
+# --- Nodes ---
 
-def call_model(state: AgentState, config: Optional[RunnableConfig] = None) -> AgentState:
-    context = state.get("context", {})
-    context_message = (
-        f"Here is the current context:\n{context}\n"
-        "Use it to make informed decisions or chain tool results."
-    )
-
-    raw_model = init_model(config)
-    model = raw_model.bind_tools(tools, tool_choice="any")
+def call_model(state: AgentState):
+    messages = state["messages"]
     
-    all_messages = [system_prompt, HumanMessage(content=context_message)] + list(state["messages"])
-    response = model.invoke(all_messages)
-
-    return {
-        "messages": list(state["messages"]) + [response],
-        "context": context,
-        "last_tool_output": state.get("last_tool_output"),
-    }
-
+    # System prompt to enforce behavior
+    system_prompt = SystemMessage(content=(
+        "You are an email assistant. "
+        "Process: \n"
+        "1. If the user asks to send an email, ALWAYS generate the body first using `generate_email_body`.\n"
+        "2. Take the HTML output from step 1 and pass it into `send_email`.\n"
+        "3. Once `send_email` returns 'SUCCESS', output a final text confirmation to the user and STOP."
+    ))
     
-if "GOOGLE_API_KEY" not in os.environ:
-    os.environ["GOOGLE_API_KEY"] = getpass.getpass("Enter your Google AI API key: ")
+    # Prepend system prompt if not present (or just let the model handle context)
+    response = llm_with_tools.invoke([system_prompt] + messages)
+    return {"messages": [response]}
 
-def call_tool(state: AgentState) -> AgentState:
-    last_msg = state["messages"][-1]
-
-    # No tool call? stop here.
-    if not hasattr(last_msg, "tool_calls") or not last_msg.tool_calls:
-        return state
-
-    tool_call = last_msg.tool_calls[0]
-    tool_name = tool_call["name"]
-    tool_args = tool_call["args"]
-
-    # Find the tool function
-    tool_fn = next(t for t in tools if t.name == tool_name)
-    result = tool_fn.invoke(tool_args)
-    print(f"Tool `{tool_name}` executed successfully.\nResult: {result}")
-    # Always append an AIMessage with NO tool calls inside
-    ai_msg = AIMessage(
-        content=f"Tool `{tool_name}` executed successfully.\nResult: {result.message}",
-        tool_calls=[]        # <==== VERY IMPORTANT
-    )
-
-    return {
-        "messages": list(state["messages"]) + [ai_msg],
-        "context": {**state.get("context", {}), tool_name: result},
-        "last_tool_output": result if isinstance(result, dict) else {"output": str(result)},
-    }
-
+def call_tool(state: AgentState):
+    messages = state["messages"]
+    last_message = messages[-1]
+    
+    tool_results = []
+    
+    # Iterate over all tool calls (models might output multiple parallel calls)
+    for tool_call in last_message.tool_calls:
+        action = tool_call
+        tool_name = action["name"]
+        tool_args = action["args"]
+        tool_call_id = action["id"] # Critical for syncing with LLM
+        
+        print(f"⚙️ Executing Tool: {tool_name}")
+        
+        # Router for tools
+        if tool_name == "generate_email_body":
+            result = generate_email_body.invoke(tool_args)
+        elif tool_name == "send_email":
+            result = send_email.invoke(tool_args)
+        else:
+            result = "Error: Tool not found."
+            
+        # Create the proper ToolMessage
+        tool_results.append(ToolMessage(
+            tool_call_id=tool_call_id,
+            content=str(result),
+            name=tool_name
+        ))
+        
+    return {"messages": tool_results}
 
 def should_continue(state: AgentState) -> Literal["tools", "__end__"]:
-    """Determine if the agent should continue and last message contains tools calls"""
+    messages = state["messages"]
+    last_message = messages[-1]
     
-    result = state["messages"][-1]
-    shouldContinue = hasattr(result, "tool_calls") and len(result.tool_calls) > 0
-    return "tools" if shouldContinue else "__end__"
+    # If the LLM made tool calls, go to the tool node
+    if last_message.tool_calls and len(last_message.tool_calls) > 0:
+        return "tools"
+    # Otherwise, stop
+    return "__end__"
 
-# Define the graph
-graph = (
-    StateGraph(AgentState, context_schema=Configuration)
-    .add_node("llm",call_model)
-    .add_node("tools", call_tool)
-    .add_edge("__start__", "llm")
-    .add_conditional_edges(
-        "llm",
-        should_continue
-    )
-    .add_edge("tools", "llm")
-    .compile(name="LLM -> Brevo Graph")
+# --- Graph Definition ---
+workflow = StateGraph(AgentState)
+
+workflow.add_node("agent", call_model)
+workflow.add_node("tools", call_tool)
+
+workflow.set_entry_point("agent")
+
+workflow.add_conditional_edges(
+    "agent",
+    should_continue,
 )
+workflow.add_edge("tools", "agent") # Loop back to agent to process tool result
+
+graph = workflow.compile()
+
+# --- Test Execution ---
+if __name__ == "__main__":
+    from langchain_core.messages import HumanMessage
+    
+    print("Starting Graph...")
+    user_input = "Send an email to ghostrex2@gmail.com about the advantage of using Groq over LangChain. Say we need to discuss the roadmap."
+    
+    # Stream the output to see steps
+    for event in graph.stream({"messages": [HumanMessage(content=user_input)]},stream_mode="values"):
+        for key, value in event.items():
+            print(f"\n--- Node: {key} ---")
+            # Uncomment to see full state details
+            # print(value)
+        
+        message = event["messages"][-1]
+        if isinstance(message, tuple):
+            print(message)
+        
+        else:
+            message.pretty_print()
