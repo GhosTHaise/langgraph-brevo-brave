@@ -11,6 +11,9 @@ from langchain_core.messages import BaseMessage, SystemMessage, ToolMessage
 
 # Import our tools
 from agent.tools.tools import send_email, generate_email_body
+from dotenv import load_dotenv
+
+load_dotenv()
 
 if "GROQ_API_KEY" not in os.environ:
     os.environ["GROQ_API_KEY"] = getpass.getpass("Enter your Groq API key: ")
@@ -83,7 +86,7 @@ def should_continue(state: AgentState) -> Literal["tools", "__end__"]:
     last_message = messages[-1]
     
     # If the LLM made tool calls, go to the tool node
-    if last_message.tool_calls and last_message.tool_calls.length > 0:
+    if last_message.tool_calls and len(last_message.tool_calls) > 0:
         return "tools"
     # Otherwise, stop
     return "__end__"
@@ -109,11 +112,18 @@ if __name__ == "__main__":
     from langchain_core.messages import HumanMessage
     
     print("Starting Graph...")
-    user_input = "Send an email to ghostrex2@gmail.com about our meeting on Friday. Say we need to discuss the roadmap."
+    user_input = "Send an email to ghostrex2@gmail.com about the advantage of using Groq over LangChain. Say we need to discuss the roadmap."
     
     # Stream the output to see steps
-    for event in graph.stream({"messages": [HumanMessage(content=user_input)]}):
+    for event in graph.stream({"messages": [HumanMessage(content=user_input)]},stream_mode="values"):
         for key, value in event.items():
             print(f"\n--- Node: {key} ---")
             # Uncomment to see full state details
             # print(value)
+        
+        message = event["messages"][-1]
+        if isinstance(message, tuple):
+            print(message)
+        
+        else:
+            message.pretty_print()

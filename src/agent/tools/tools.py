@@ -6,6 +6,9 @@ from brevo_python.rest import ApiException
 from langchain_core.tools import tool
 from langchain_core.messages import SystemMessage, HumanMessage
 from langchain_groq import ChatGroq
+from dotenv import load_dotenv
+
+load_dotenv()
 
 # Ensure API Keys are set
 if "BREVO_API_KEY" not in os.environ:
